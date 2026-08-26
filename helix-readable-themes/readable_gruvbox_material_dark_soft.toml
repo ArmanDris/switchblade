@@ -1,0 +1,29 @@
+# Gruvbox Material Dark Soft for Helix.
+# Helix already includes this palette; this alias adds the same warm accent
+# cursor used in the matching Ghostty port.
+
+inherits = "gruvbox_material_dark_soft"
+
+"ui.cursor.primary" = { fg = "bg0", bg = "orange" }
+"ui.cursor.primary.insert" = { fg = "bg0", bg = "green" }
+"ui.cursor.primary.select" = { fg = "bg0", bg = "blue" }
+"ui.selection.primary" = { bg = "bg3" }
+
+[palette]
+fg0 = "#d4be98"
+fg1 = "#ddc7a1"
+bg0 = "#32302f"
+bg1 = "#3c3836"
+bg2 = "#504945"
+bg3 = "#665c54"
+bg4 = "#5b534d"
+grey0 = "#7c6f64"
+grey1 = "#928374"
+grey2 = "#a89984"
+aqua = "#89b482"
+blue = "#7daea3"
+green = "#a9b665"
+orange = "#e78a4e"
+purple = "#d3869b"
+red = "#ea6962"
+yellow = "#d8a657"

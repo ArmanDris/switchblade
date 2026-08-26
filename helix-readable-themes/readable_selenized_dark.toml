@@ -1,0 +1,73 @@
+# Selenized Dark for Helix.
+# Selenized is a perceptually balanced Solarized redesign. Syntax semantics
+# inherit from Helix's Solarized theme; UI colors use the current terminal port.
+
+inherits = "solarized_dark"
+
+"ui.background" = { fg = "fg0", bg = "bg0" }
+"ui.background.separator" = { fg = "bg2" }
+"ui.linenr" = { fg = "dim0", bg = "bg1" }
+"ui.linenr.selected" = { fg = "blue", modifiers = ["bold"] }
+"ui.cursorline.primary" = { bg = "bg1" }
+"ui.cursorline.secondary" = { bg = "bg1" }
+"ui.statusline" = { fg = "fg0", bg = "bg2" }
+"ui.statusline.inactive" = { fg = "dim0", bg = "bg1" }
+"ui.statusline.normal" = { fg = "bg0", bg = "blue", modifiers = ["bold"] }
+"ui.statusline.insert" = { fg = "bg0", bg = "green", modifiers = ["bold"] }
+"ui.statusline.select" = { fg = "bg0", bg = "yellow", modifiers = ["bold"] }
+"ui.popup" = { fg = "fg0", bg = "bg1" }
+"ui.popup.info" = { fg = "fg0", bg = "bg2" }
+"ui.help" = { fg = "fg0", bg = "bg1" }
+"ui.menu" = { fg = "fg0", bg = "bg1" }
+"ui.menu.selected" = { fg = "bg0", bg = "fg0" }
+"ui.menu.scroll" = { fg = "dim0", bg = "bg1" }
+"ui.window" = { fg = "bg2" }
+"ui.text" = "fg0"
+"ui.text.focus" = { fg = "fg1", modifiers = ["bold"] }
+"ui.text.inactive" = "dim0"
+"ui.text.directory" = "blue"
+"ui.virtual" = "dim0"
+"ui.virtual.indent-guide" = "bg2"
+"ui.virtual.inlay-hint" = { fg = "dim0", modifiers = ["italic"] }
+"ui.virtual.ruler" = { bg = "bg1" }
+"ui.virtual.jump-label" = { fg = "red", modifiers = ["bold"] }
+"ui.selection" = { bg = "selection" }
+"ui.selection.primary" = { bg = "selection-primary" }
+"ui.cursor" = { fg = "bg0", bg = "cyan" }
+"ui.cursor.primary" = { fg = "bg0", bg = "fg0" }
+"ui.cursor.insert" = { fg = "bg0", bg = "green" }
+"ui.cursor.select" = { fg = "bg0", bg = "blue" }
+"ui.cursor.match" = { fg = "fg1", bg = "bg2", modifiers = ["bold"] }
+"ui.highlight" = { bg = "bg2" }
+
+[palette]
+# Names required by the inherited Solarized syntax map.
+base03 = "#103c48"
+base025 = "#174956"
+base02 = "#174956"
+base0175 = "#325b66"
+base015 = "#325b66"
+base01 = "#72898f"
+base00 = "#72898f"
+base0 = "#adbcbc"
+base1 = "#adbcbc"
+base2 = "#cad8d9"
+base3 = "#cad8d9"
+
+bg0 = "#103c48"
+bg1 = "#174956"
+bg2 = "#325b66"
+selection = "#2d5b69"
+selection-primary = "#325b66"
+dim0 = "#72898f"
+fg0 = "#adbcbc"
+fg1 = "#cad8d9"
+
+red = "#fa5750"
+green = "#75b938"
+yellow = "#dbb32d"
+blue = "#4695f7"
+magenta = "#f275be"
+violet = "#a580e2"
+cyan = "#41c7b9"
+orange = "#ed8649"
