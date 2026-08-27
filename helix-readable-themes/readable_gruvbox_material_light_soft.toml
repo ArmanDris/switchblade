@@ -2,7 +2,7 @@
 # Helix already includes this palette; this alias adds the same warm accent
 # cursor used in the matching Ghostty port.
 
-inherits = "gruvbox_material_light_soft"
+inherits = "gruvbox-material"
 
 "ui.cursor.primary" = { fg = "bg0", bg = "orange" }
 "ui.cursor.primary.insert" = { fg = "bg0", bg = "green" }
