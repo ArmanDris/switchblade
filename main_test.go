@@ -149,6 +149,32 @@ func TestRunCancelIsSuccessful(t *testing.T) {
 	}
 }
 
+func TestRunStylesWarnings(t *testing.T) {
+	root := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	warning := "Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme. Remove them to ensure the switchblade theme is always used."
+	exitCode := run(
+		&stdout,
+		&stderr,
+		func() (themeSelection, error) { return themeSelections[2], nil },
+		func() (string, error) { return root, nil },
+		func(string, themeSelection) ([]string, error) { return []string{warning}, nil },
+	)
+	if exitCode != 0 {
+		t.Fatalf("run() = %d, want 0", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("success output = %q, want no output", stdout.String())
+	}
+	want := "\x1b[48;5;214;30m ⚠ warning: \x1b[0m  Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and\n" +
+		"               \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme.\n" +
+		"               Remove them to ensure the switchblade theme is always used.\n"
+	if got := stderr.String(); got != want {
+		t.Errorf("warning output = %q, want %q", got, want)
+	}
+}
+
 func TestConfigRoot(t *testing.T) {
 	absolute := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", absolute)

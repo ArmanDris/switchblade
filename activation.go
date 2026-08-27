@@ -55,7 +55,7 @@ func activateThemeWithDependencies(
 		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
 	filename := "switchblade-" + selection.theme + "-" + selection.variant
-	zellijTheme, zellijDarkTheme, zellijLightTheme, err := zellijThemeNames(selection)
+	zellijTheme, err := zellijThemeName(selection)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func activateThemeWithDependencies(
 	if err != nil {
 		return nil, fmt.Errorf("read Zellij config: %w", err)
 	}
-	zellijCandidate, err := configureZellij(zellijOriginal, zellijTheme, zellijDarkTheme, zellijLightTheme)
+	zellijCandidate, zellijWarnings, err := configureZellij(zellijOriginal, zellijTheme)
 	if err != nil {
 		return nil, fmt.Errorf("edit Zellij config: %w", err)
 	}
@@ -178,7 +178,7 @@ func activateThemeWithDependencies(
 		return commit(fmt.Errorf("write Zellij config: %w", err))
 	}
 
-	var warnings []string
+	warnings := zellijWarnings
 	if warning := reloadHelix(dependencies.command); warning != "" {
 		warnings = append(warnings, warning)
 	}
@@ -253,82 +253,78 @@ func zellijConfigPath(home, root string, getenv func(string) string) (string, er
 	return filepath.Join(home, ".config", "zellij", "config.kdl"), nil
 }
 
-func zellijThemeNames(selection themeSelection) (theme, dark, light string, err error) {
+func zellijThemeName(selection themeSelection) (string, error) {
 	switch selection.theme {
 	case "gruvbox-material":
-		return "gruvbox-" + selection.variant, "gruvbox-dark", "gruvbox-light", nil
+		return "gruvbox-" + selection.variant, nil
 	case "everforest":
-		return "everforest-" + selection.variant, "everforest-dark", "everforest-light", nil
+		return "everforest-" + selection.variant, nil
 	case "selenized-bw":
-		return "solarized-" + selection.variant, "solarized-dark", "solarized-light", nil
+		return "solarized-" + selection.variant, nil
 	default:
-		return "", "", "", fmt.Errorf("no Zellij theme mapping for %s", selection.theme)
+		return "", fmt.Errorf("no Zellij theme mapping for %s", selection.theme)
 	}
 }
 
 var zellijThemeLine = regexp.MustCompile(`^(\s*)(theme|theme_dark|theme_light)\s+"(?:[^"\\]|\\.)*"\s*;?\s*(?://.*)?(?:\r?\n)?$`)
 
-func configureZellij(original []byte, theme, darkTheme, lightTheme string) ([]byte, error) {
+func configureZellij(original []byte, theme string) ([]byte, []string, error) {
 	newline := "\n"
 	if bytes.Contains(original, []byte("\r\n")) {
 		newline = "\r\n"
-	}
-	desired := map[string]string{
-		"theme":       theme,
-		"theme_dark":  darkTheme,
-		"theme_light": lightTheme,
 	}
 	lines := strings.SplitAfter(string(original), "\n")
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
 	depth := 0
-	found := make(map[string]int)
+	managedTheme := -1
+	overrideThemes := make(map[string]bool)
 	for index, line := range lines {
 		if depth == 0 {
 			trimmed := strings.TrimSpace(line)
-			for _, key := range []string{"theme", "theme_dark", "theme_light"} {
+			for _, key := range []string{"theme", "theme_light", "theme_dark"} {
 				if !strings.HasPrefix(trimmed, key) || (len(trimmed) > len(key) && trimmed[len(key)] != ' ' && trimmed[len(key)] != '\t' && trimmed[len(key)] != '"') {
 					continue
 				}
 				matches := zellijThemeLine.FindStringSubmatch(line)
 				if matches == nil || matches[2] != key {
-					return nil, fmt.Errorf("unsupported top-level Zellij %s declaration", key)
+					return nil, nil, fmt.Errorf("unsupported top-level Zellij %s declaration", key)
 				}
-				if _, duplicate := found[key]; duplicate {
-					return nil, fmt.Errorf("multiple top-level Zellij %s declarations", key)
+				if key == "theme" {
+					if managedTheme != -1 {
+						return nil, nil, fmt.Errorf("multiple top-level Zellij theme declarations")
+					}
+					managedTheme = index
+				} else {
+					overrideThemes[key] = true
 				}
-				found[key] = index
 			}
 		}
 		nextDepth, err := advanceKDLDepth(line, depth)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		depth = nextDepth
 	}
 	if depth != 0 {
-		return nil, fmt.Errorf("unterminated Zellij KDL block")
+		return nil, nil, fmt.Errorf("unterminated Zellij KDL block")
 	}
 
-	var additions strings.Builder
-	for _, key := range []string{"theme", "theme_dark", "theme_light"} {
-		managed := key + " " + strconv.Quote(desired[key]) + " // switchblade managed" + newline
-		index, exists := found[key]
-		if !exists {
-			additions.WriteString(managed)
-			continue
-		}
-		if strings.Contains(lines[index], "// switchblade managed") {
-			lines[index] = managed
-			continue
-		}
-		lines[index] = "// switchblade previous " + key + ": " + strings.TrimSpace(lines[index]) + newline + managed
+	managed := "theme " + strconv.Quote(theme) + " // switchblade managed" + newline
+	if managedTheme == -1 {
+		lines[0] = managed + lines[0]
+	} else if strings.Contains(lines[managedTheme], "// switchblade managed") {
+		lines[managedTheme] = managed
+	} else {
+		lines[managedTheme] = "// switchblade previous theme: " + strings.TrimSpace(lines[managedTheme]) + newline + managed
 	}
-	if additions.Len() > 0 {
-		lines[0] = additions.String() + lines[0]
+
+	var warnings []string
+	if overrideThemes["theme_light"] || overrideThemes["theme_dark"] {
+		warnings = append(warnings, "Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme. Remove them to ensure the switchblade theme is always used.")
 	}
-	return []byte(strings.Join(lines, "")), nil
+	return []byte(strings.Join(lines, "")), warnings, nil
 }
 
 func advanceKDLDepth(line string, depth int) (int, error) {

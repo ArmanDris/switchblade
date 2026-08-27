@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/manifoldco/promptui"
 )
@@ -112,11 +113,60 @@ func run(
 		return 1
 	}
 	for _, warning := range warnings {
-		fmt.Fprintf(stderr, "warning: %s\n", warning)
+		writeWarning(stderr, warning)
 	}
-	fmt.Fprintf(stdout, "applied %s\n", selection.label)
-
 	return 0
+}
+
+const (
+	warningLabel  = "\x1b[48;5;214;30m ⚠ warning: \x1b[0m"
+	warningIndent = "               "
+	warningWidth  = 80
+)
+
+func writeWarning(stderr io.Writer, warning string) {
+	words := strings.Fields(warning)
+	line := ""
+	firstLine := true
+	writeLine := func(line string) {
+		if firstLine {
+			fmt.Fprintf(stderr, "%s  %s\n", warningLabel, line)
+			firstLine = false
+			return
+		}
+		fmt.Fprintf(stderr, "%s%s\n", warningIndent, line)
+	}
+	for _, word := range words {
+		if line != "" && visibleLength(line)+1+visibleLength(word) > warningWidth-len(warningIndent) {
+			writeLine(line)
+			line = word
+			continue
+		}
+		if line == "" {
+			line = word
+		} else {
+			line += " " + word
+		}
+	}
+	if line != "" {
+		writeLine(line)
+	}
+}
+
+func visibleLength(text string) int {
+	length := 0
+	inEscape := false
+	for _, character := range text {
+		switch {
+		case character == '\x1b':
+			inEscape = true
+		case inEscape && character >= '@' && character <= '~':
+			inEscape = false
+		case !inEscape:
+			length++
+		}
+	}
+	return length
 }
 
 func selectTheme() (themeSelection, error) {
@@ -132,7 +182,7 @@ func selectTheme() (themeSelection, error) {
 		Stdin: quitAwareInput(os.Stdin),
 		Templates: &promptui.SelectTemplates{
 			Label:    "{{ . }}:",
-			Active:   "> \x1b[7m{{ . }}\x1b[0m",
+			Active:   "\x1b[1;36m> {{ . }}\x1b[0m",
 			Inactive: "  {{ . }}",
 			Selected: "> {{ . }}",
 		},

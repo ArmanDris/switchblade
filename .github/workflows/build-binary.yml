@@ -1,0 +1,38 @@
+name: Build switchblade binary
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - switchblade
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build macOS Apple Silicon binary
+        run: GOOS=darwin GOARCH=arm64 go build -o switchblade .
+
+      - name: Commit updated binary
+        run: |
+          if git diff --quiet -- switchblade; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add switchblade
+          git commit -m "chore: rebuild switchblade"
+          git push

@@ -148,8 +148,13 @@ func TestActivateTheme(t *testing.T) {
 	}
 	zellijConfig := filepath.Join(home, ".config", "zellij", "config.kdl")
 	assertContainsFile(t, zellijConfig, `theme "everforest-light" // switchblade managed`)
-	assertContainsFile(t, zellijConfig, `theme_dark "everforest-dark" // switchblade managed`)
-	assertContainsFile(t, zellijConfig, `theme_light "everforest-light" // switchblade managed`)
+	data, err := os.ReadFile(zellijConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "theme_dark") || strings.Contains(string(data), "theme_light") {
+		t.Errorf("Switchblade added automatic Zellij theme settings:\n%s", data)
+	}
 
 	if _, err := installTheme(root, themeSelections[5]); err != nil {
 		t.Fatal(err)
@@ -159,7 +164,7 @@ func TestActivateTheme(t *testing.T) {
 	}
 	assertLink(t, filepath.Join(root, "ghostty", "themes", "switchblade-current"), "switchblade-selenized-bw-dark")
 	assertContainsFile(t, helixConfig, `theme = "switchblade-selenized-bw-dark" # switchblade managed`)
-	data, err := os.ReadFile(helixConfig)
+	data, err = os.ReadFile(helixConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,24 +180,57 @@ theme_light "gruvbox-light"
 keybinds {
     normal { bind "x" { Quit; } }
 }
+
+func TestConfigureZellijWarnsForConfiguredOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		input       string
+		wantWarning string
+	}{
+		{
+			name:        "light only",
+			input:       "theme_light \"gruvbox-light\"\n",
+			wantWarning: "Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme. Remove them to ensure the switchblade theme is always used.",
+		},
+		{
+			name:        "dark only",
+			input:       "theme_dark \"gruvbox-dark\"\n",
+			wantWarning: "Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme. Remove them to ensure the switchblade theme is always used.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, warnings, err := configureZellij([]byte(test.input), "solarized-light")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(warnings) != 1 || warnings[0] != test.wantWarning {
+				t.Fatalf("warnings = %q, want %q", warnings, test.wantWarning)
+			}
+		})
+	}
+}
 `)
-	output, err := configureZellij(input, "solarized-light", "solarized-dark", "solarized-light")
+	output, warnings, err := configureZellij(input, "solarized-light")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		`// switchblade previous theme: theme "gruvbox-dark"`,
 		`theme "solarized-light" // switchblade managed`,
-		`theme_dark "solarized-dark" // switchblade managed`,
-		`theme_light "solarized-light" // switchblade managed`,
+		`theme_dark "gruvbox-dark"`,
+		`theme_light "gruvbox-light"`,
 		`normal { bind "x" { Quit; } }`,
 	} {
 		if !bytes.Contains(output, []byte(want)) {
 			t.Errorf("output does not contain %q:\n%s", want, output)
 		}
 	}
+	wantWarning := "Your Zellij config contains the \x1b[3mtheme_light\x1b[0m and \x1b[3mtheme_dark\x1b[0m options. They may override your switchblade theme. Remove them to ensure the switchblade theme is always used."
+	if len(warnings) != 1 || warnings[0] != wantWarning {
+		t.Fatalf("warnings = %q, want %q", warnings, wantWarning)
+	}
 
-	updated, err := configureZellij(output, "everforest-dark", "everforest-dark", "everforest-light")
+	updated, warnings, err := configureZellij(output, "everforest-dark")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +239,9 @@ keybinds {
 	}
 	if !bytes.Contains(updated, []byte(`theme "everforest-dark" // switchblade managed`)) {
 		t.Errorf("managed theme was not updated:\n%s", updated)
+	}
+	if len(warnings) != 1 || warnings[0] != wantWarning {
+		t.Fatalf("warnings after update = %q, want %q", warnings, wantWarning)
 	}
 }
 
@@ -227,14 +268,14 @@ func TestZellijConfigPath(t *testing.T) {
 	}
 }
 
-func TestZellijThemeNames(t *testing.T) {
+func TestZellijThemeName(t *testing.T) {
 	for _, selection := range themeSelections {
-		theme, dark, light, err := zellijThemeNames(selection)
+		theme, err := zellijThemeName(selection)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasSuffix(theme, "-"+selection.variant) || !strings.HasSuffix(dark, "-dark") || !strings.HasSuffix(light, "-light") {
-			t.Errorf("unexpected Zellij mapping for %s: %q, %q, %q", selection.label, theme, dark, light)
+		if !strings.HasSuffix(theme, "-"+selection.variant) {
+			t.Errorf("unexpected Zellij mapping for %s: %q", selection.label, theme)
 		}
 	}
 }
