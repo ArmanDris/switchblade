@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -24,12 +25,14 @@ type activationDependencies struct {
 	homeDir  func() (string, error)
 	lookPath func(string) (string, error)
 	command  func(string, ...string) ([]byte, error)
+	getenv   func(string) string
 }
 
 func activateTheme(root string, selection themeSelection) ([]string, error) {
 	return activateThemeWithDependencies(root, selection, activationDependencies{
 		homeDir:  os.UserHomeDir,
 		lookPath: exec.LookPath,
+		getenv:   os.Getenv,
 		command: func(name string, args ...string) ([]byte, error) {
 			return exec.Command(name, args...).CombinedOutput()
 		},
@@ -41,7 +44,7 @@ func activateThemeWithDependencies(
 	selection themeSelection,
 	dependencies activationDependencies,
 ) ([]string, error) {
-	for _, command := range []string{"hx", "ghostty"} {
+	for _, command := range []string{"hx", "ghostty", "zellij"} {
 		if _, err := dependencies.lookPath(command); err != nil {
 			return nil, fmt.Errorf("find %s: %w", command, err)
 		}
@@ -52,6 +55,10 @@ func activateThemeWithDependencies(
 		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
 	filename := "switchblade-" + selection.theme + "-" + selection.variant
+	zellijTheme, zellijDarkTheme, zellijLightTheme, err := zellijThemeNames(selection)
+	if err != nil {
+		return nil, err
+	}
 
 	helixConfig := filepath.Join(root, "helix", "config.toml")
 	ghosttyConfig, err := preferredGhosttyConfig(home, root)
@@ -59,6 +66,10 @@ func activateThemeWithDependencies(
 		return nil, err
 	}
 	ghosttyManagedConfig := filepath.Join(filepath.Dir(ghosttyConfig), ghosttyManagedFilename)
+	zellijConfig, err := zellijConfigPath(home, root, dependencyGetenv(dependencies))
+	if err != nil {
+		return nil, err
+	}
 
 	helixConfigTarget, err := writableConfigTarget(helixConfig)
 	if err != nil {
@@ -67,6 +78,10 @@ func activateThemeWithDependencies(
 	ghosttyConfigTarget, err := writableConfigTarget(ghosttyConfig)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Ghostty config: %w", err)
+	}
+	zellijConfigTarget, err := writableConfigTarget(zellijConfig)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Zellij config: %w", err)
 	}
 
 	helixOriginal, helixMode, err := readOptionalRegularFile(helixConfigTarget, 0o600)
@@ -99,6 +114,18 @@ func activateThemeWithDependencies(
 	}
 	if managedInfo != nil && !bytes.Equal(managedOriginal, managedContents) {
 		return nil, fmt.Errorf("%s already exists with unexpected contents", ghosttyManagedConfig)
+	}
+
+	zellijOriginal, zellijMode, err := readOptionalRegularFile(zellijConfigTarget, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("read Zellij config: %w", err)
+	}
+	zellijCandidate, err := configureZellij(zellijOriginal, zellijTheme, zellijDarkTheme, zellijLightTheme)
+	if err != nil {
+		return nil, fmt.Errorf("edit Zellij config: %w", err)
+	}
+	if err := validateZellijConfig(zellijCandidate, filepath.Dir(zellijConfig), dependencies.command); err != nil {
+		return nil, err
 	}
 
 	helixTheme := filepath.Join(root, "helix", "themes", filename+".toml")
@@ -147,6 +174,9 @@ func activateThemeWithDependencies(
 	if output, err := dependencies.command("ghostty", "+validate-config"); err != nil {
 		return commit(commandError("validate effective Ghostty config", output, err))
 	}
+	if err := transaction.replaceFile(zellijConfigTarget, zellijCandidate, zellijMode); err != nil {
+		return commit(fmt.Errorf("write Zellij config: %w", err))
+	}
 
 	var warnings []string
 	if warning := reloadHelix(dependencies.command); warning != "" {
@@ -156,6 +186,13 @@ func activateThemeWithDependencies(
 		warnings = append(warnings, warning)
 	}
 	return warnings, nil
+}
+
+func dependencyGetenv(dependencies activationDependencies) func(string) string {
+	if dependencies.getenv != nil {
+		return dependencies.getenv
+	}
+	return os.Getenv
 }
 
 func preferredGhosttyConfig(home, root string) (string, error) {
@@ -180,6 +217,177 @@ func preferredGhosttyConfig(home, root string) (string, error) {
 		}
 	}
 	return paths[0], nil
+}
+
+func zellijConfigPath(home, root string, getenv func(string) string) (string, error) {
+	if path := getenv("ZELLIJ_CONFIG_FILE"); path != "" {
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("ZELLIJ_CONFIG_FILE must be absolute")
+		}
+		return filepath.Clean(path), nil
+	}
+	if directory := getenv("ZELLIJ_CONFIG_DIR"); directory != "" {
+		if !filepath.IsAbs(directory) {
+			return "", fmt.Errorf("ZELLIJ_CONFIG_DIR must be absolute")
+		}
+		return filepath.Join(filepath.Clean(directory), "config.kdl"), nil
+	}
+
+	for _, directory := range []string{
+		filepath.Join(home, ".config", "zellij"),
+		filepath.Join(root, "zellij"),
+		"/etc/zellij",
+	} {
+		info, err := os.Stat(directory)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			return "", fmt.Errorf("inspect Zellij config directory %s: %w", directory, err)
+		case info.IsDir():
+			return filepath.Join(directory, "config.kdl"), nil
+		default:
+			return "", fmt.Errorf("Zellij config directory %s is not a directory", directory)
+		}
+	}
+	return filepath.Join(home, ".config", "zellij", "config.kdl"), nil
+}
+
+func zellijThemeNames(selection themeSelection) (theme, dark, light string, err error) {
+	switch selection.theme {
+	case "gruvbox-material":
+		return "gruvbox-" + selection.variant, "gruvbox-dark", "gruvbox-light", nil
+	case "everforest":
+		return "everforest-" + selection.variant, "everforest-dark", "everforest-light", nil
+	case "selenized-bw":
+		return "solarized-" + selection.variant, "solarized-dark", "solarized-light", nil
+	default:
+		return "", "", "", fmt.Errorf("no Zellij theme mapping for %s", selection.theme)
+	}
+}
+
+var zellijThemeLine = regexp.MustCompile(`^(\s*)(theme|theme_dark|theme_light)\s+"(?:[^"\\]|\\.)*"\s*;?\s*(?://.*)?(?:\r?\n)?$`)
+
+func configureZellij(original []byte, theme, darkTheme, lightTheme string) ([]byte, error) {
+	newline := "\n"
+	if bytes.Contains(original, []byte("\r\n")) {
+		newline = "\r\n"
+	}
+	desired := map[string]string{
+		"theme":       theme,
+		"theme_dark":  darkTheme,
+		"theme_light": lightTheme,
+	}
+	lines := strings.SplitAfter(string(original), "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	depth := 0
+	found := make(map[string]int)
+	for index, line := range lines {
+		if depth == 0 {
+			trimmed := strings.TrimSpace(line)
+			for _, key := range []string{"theme", "theme_dark", "theme_light"} {
+				if !strings.HasPrefix(trimmed, key) || (len(trimmed) > len(key) && trimmed[len(key)] != ' ' && trimmed[len(key)] != '\t' && trimmed[len(key)] != '"') {
+					continue
+				}
+				matches := zellijThemeLine.FindStringSubmatch(line)
+				if matches == nil || matches[2] != key {
+					return nil, fmt.Errorf("unsupported top-level Zellij %s declaration", key)
+				}
+				if _, duplicate := found[key]; duplicate {
+					return nil, fmt.Errorf("multiple top-level Zellij %s declarations", key)
+				}
+				found[key] = index
+			}
+		}
+		nextDepth, err := advanceKDLDepth(line, depth)
+		if err != nil {
+			return nil, err
+		}
+		depth = nextDepth
+	}
+	if depth != 0 {
+		return nil, fmt.Errorf("unterminated Zellij KDL block")
+	}
+
+	var additions strings.Builder
+	for _, key := range []string{"theme", "theme_dark", "theme_light"} {
+		managed := key + " " + strconv.Quote(desired[key]) + " // switchblade managed" + newline
+		index, exists := found[key]
+		if !exists {
+			additions.WriteString(managed)
+			continue
+		}
+		if strings.Contains(lines[index], "// switchblade managed") {
+			lines[index] = managed
+			continue
+		}
+		lines[index] = "// switchblade previous " + key + ": " + strings.TrimSpace(lines[index]) + newline + managed
+	}
+	if additions.Len() > 0 {
+		lines[0] = additions.String() + lines[0]
+	}
+	return []byte(strings.Join(lines, "")), nil
+}
+
+func advanceKDLDepth(line string, depth int) (int, error) {
+	inString := false
+	escaped := false
+	for index := 0; index < len(line); index++ {
+		character := line[index]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == '"' {
+				inString = false
+			}
+			continue
+		}
+		if character == '"' {
+			inString = true
+			continue
+		}
+		if character == '/' && index+1 < len(line) && line[index+1] == '/' {
+			break
+		}
+		switch character {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth < 0 {
+				return 0, fmt.Errorf("unexpected closing brace in Zellij config")
+			}
+		}
+	}
+	if inString {
+		return 0, fmt.Errorf("unsupported multiline string in Zellij config")
+	}
+	return depth, nil
+}
+
+func validateZellijConfig(candidate []byte, configDirectory string, command func(string, ...string) ([]byte, error)) error {
+	temporary, err := os.CreateTemp("", "switchblade-zellij-*.kdl")
+	if err != nil {
+		return fmt.Errorf("create temporary Zellij config: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(candidate); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write temporary Zellij config: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary Zellij config: %w", err)
+	}
+	output, err := command("zellij", "--config", temporaryPath, "--config-dir", configDirectory, "setup", "--check")
+	if err != nil {
+		return commandError("validate Zellij config", output, err)
+	}
+	return nil
 }
 
 func writableConfigTarget(path string) (string, error) {

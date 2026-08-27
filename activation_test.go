@@ -120,6 +120,7 @@ func TestActivateTheme(t *testing.T) {
 	dependencies := activationDependencies{
 		homeDir:  func() (string, error) { return home, nil },
 		lookPath: func(command string) (string, error) { return "/usr/bin/" + command, nil },
+		getenv:   func(string) string { return "" },
 		command: func(name string, args ...string) ([]byte, error) {
 			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 			if name == "hx" {
@@ -142,9 +143,13 @@ func TestActivateTheme(t *testing.T) {
 	assertContainsFile(t, ghosttyConfig, "theme = adventure time")
 	assertContainsFile(t, ghosttyConfig, "config-file = "+strconvQuote(filepath.Join(filepath.Dir(ghosttyConfig), "switchblade.conf")))
 	assertContainsFile(t, filepath.Join(filepath.Dir(ghosttyConfig), "switchblade.conf"), "theme = switchblade-current")
-	if len(commands) != 5 {
-		t.Fatalf("commands = %q, want three validations and two process checks", commands)
+	if len(commands) != 6 {
+		t.Fatalf("commands = %q, want four validations and two process checks", commands)
 	}
+	zellijConfig := filepath.Join(home, ".config", "zellij", "config.kdl")
+	assertContainsFile(t, zellijConfig, `theme "everforest-light" // switchblade managed`)
+	assertContainsFile(t, zellijConfig, `theme_dark "everforest-dark" // switchblade managed`)
+	assertContainsFile(t, zellijConfig, `theme_light "everforest-light" // switchblade managed`)
 
 	if _, err := installTheme(root, themeSelections[5]); err != nil {
 		t.Fatal(err)
@@ -160,6 +165,77 @@ func TestActivateTheme(t *testing.T) {
 	}
 	if bytes.Count(data, []byte("switchblade previous theme")) != 1 {
 		t.Errorf("repeated activation duplicated recovery comments:\n%s", data)
+	}
+}
+
+func TestConfigureZellij(t *testing.T) {
+	input := []byte(`theme "gruvbox-dark"
+theme_dark "gruvbox-dark"
+theme_light "gruvbox-light"
+keybinds {
+    normal { bind "x" { Quit; } }
+}
+`)
+	output, err := configureZellij(input, "solarized-light", "solarized-dark", "solarized-light")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`// switchblade previous theme: theme "gruvbox-dark"`,
+		`theme "solarized-light" // switchblade managed`,
+		`theme_dark "solarized-dark" // switchblade managed`,
+		`theme_light "solarized-light" // switchblade managed`,
+		`normal { bind "x" { Quit; } }`,
+	} {
+		if !bytes.Contains(output, []byte(want)) {
+			t.Errorf("output does not contain %q:\n%s", want, output)
+		}
+	}
+
+	updated, err := configureZellij(output, "everforest-dark", "everforest-dark", "everforest-light")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(updated, []byte("switchblade previous theme:")) != 1 {
+		t.Errorf("repeated activation duplicated recovery comments:\n%s", updated)
+	}
+	if !bytes.Contains(updated, []byte(`theme "everforest-dark" // switchblade managed`)) {
+		t.Errorf("managed theme was not updated:\n%s", updated)
+	}
+}
+
+func TestZellijConfigPath(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "zellij"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err := zellijConfigPath(home, root, func(string) string { return "" })
+	if err != nil || path != filepath.Join(root, "zellij", "config.kdl") {
+		t.Fatalf("zellijConfigPath() = %q, %v", path, err)
+	}
+
+	explicit := filepath.Join(t.TempDir(), "config.kdl")
+	path, err = zellijConfigPath(home, root, func(key string) string {
+		if key == "ZELLIJ_CONFIG_FILE" {
+			return explicit
+		}
+		return ""
+	})
+	if err != nil || path != explicit {
+		t.Fatalf("explicit zellijConfigPath() = %q, %v", path, err)
+	}
+}
+
+func TestZellijThemeNames(t *testing.T) {
+	for _, selection := range themeSelections {
+		theme, dark, light, err := zellijThemeNames(selection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(theme, "-"+selection.variant) || !strings.HasSuffix(dark, "-dark") || !strings.HasSuffix(light, "-light") {
+			t.Errorf("unexpected Zellij mapping for %s: %q, %q, %q", selection.label, theme, dark, light)
+		}
 	}
 }
 
@@ -179,7 +255,11 @@ func TestActivationRollsBackFailedValidation(t *testing.T) {
 	_, err := activateThemeWithDependencies(root, themeSelections[0], activationDependencies{
 		homeDir:  func() (string, error) { return home, nil },
 		lookPath: func(command string) (string, error) { return command, nil },
-		command: func(string, ...string) ([]byte, error) {
+		getenv:   func(string) string { return "" },
+		command: func(name string, _ ...string) ([]byte, error) {
+			if name == "zellij" {
+				return nil, nil
+			}
 			return []byte("invalid config"), errors.New("validation failed")
 		},
 	})
@@ -191,6 +271,7 @@ func TestActivationRollsBackFailedValidation(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(root, "ghostty", "themes", "switchblade-current"),
 		filepath.Join(filepath.Dir(ghosttyConfig), "switchblade.conf"),
+		filepath.Join(home, ".config", "zellij", "config.kdl"),
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("rollback left %s behind", path)
@@ -225,6 +306,7 @@ func TestActivationPreservesConfigSymlinks(t *testing.T) {
 	_, err := activateThemeWithDependencies(root, themeSelections[1], activationDependencies{
 		homeDir:  func() (string, error) { return home, nil },
 		lookPath: func(command string) (string, error) { return command, nil },
+		getenv:   func(string) string { return "" },
 		command: func(name string, _ ...string) ([]byte, error) {
 			if name == "hx" {
 				return []byte("Runtime directories: " + runtime + "\n"), nil
@@ -252,6 +334,9 @@ func TestActivationWithInstalledValidators(t *testing.T) {
 	if _, err := exec.LookPath("ghostty"); err != nil {
 		t.Skip("Ghostty is not installed")
 	}
+	if _, err := exec.LookPath("zellij"); err != nil {
+		t.Skip("Zellij is not installed")
+	}
 
 	home := t.TempDir()
 	root := t.TempDir()
@@ -268,6 +353,7 @@ func TestActivationWithInstalledValidators(t *testing.T) {
 	_, err := activateThemeWithDependencies(root, themeSelections[4], activationDependencies{
 		homeDir:  func() (string, error) { return home, nil },
 		lookPath: exec.LookPath,
+		getenv:   func(string) string { return "" },
 		command: func(name string, args ...string) ([]byte, error) {
 			if name == "pgrep" {
 				return nil, nil
